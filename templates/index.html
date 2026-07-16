@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Coco Music — Playlist Downloader</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <!-- Animated background blobs -->
+  <div class="bg-blobs">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+  </div>
+
+  <div class="app-wrapper">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">
+        <svg class="logo-icon" viewBox="0 0 40 40" fill="none">
+          <circle cx="20" cy="20" r="19" stroke="url(#g1)" stroke-width="2"/>
+          <circle cx="20" cy="20" r="6" fill="url(#g1)"/>
+          <circle cx="20" cy="20" r="2" fill="#fff"/>
+          <defs>
+            <linearGradient id="g1" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#a78bfa"/>
+              <stop offset="1" stop-color="#38bdf8"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        <span class="logo-text">Coco Music</span>
+      </div>
+      <div class="header-badge">Playlist Downloader</div>
+    </header>
+
+    <!-- Main card -->
+    <main class="main-card">
+      <div class="card-inner">
+        <h1 class="card-title">Download Your Music</h1>
+        <p class="card-subtitle">
+          Paste a Spotify playlist, Apple Music link, YouTube URL, or just type a song name.
+        </p>
+
+        <!-- Platform pills -->
+        <div class="platform-pills">
+          <span class="pill pill-spotify">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>
+            Spotify
+          </span>
+          <span class="pill pill-apple">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></svg>
+            Apple Music
+          </span>
+          <span class="pill pill-yt">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M23.495 6.205a3.007 3.007 0 0 0-2.088-2.088c-1.87-.501-9.396-.501-9.396-.501s-7.507-.01-9.396.501A3.007 3.007 0 0 0 .527 6.205a31.247 31.247 0 0 0-.522 5.805 31.247 31.247 0 0 0 .522 5.783 3.007 3.007 0 0 0 2.088 2.088c1.868.502 9.396.502 9.396.502s7.506 0 9.396-.502a3.007 3.007 0 0 0 2.088-2.088 31.247 31.247 0 0 0 .5-5.783 31.247 31.247 0 0 0-.5-5.805zM9.609 15.601V8.408l6.264 3.602z"/></svg>
+            YouTube
+          </span>
+          <span class="pill pill-search">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            Search
+          </span>
+        </div>
+
+        <!-- Input row -->
+        <div class="input-row">
+          <div class="input-wrapper" id="inputWrapper">
+            <span class="input-icon" id="platformIcon">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            </span>
+            <input
+              id="urlInput"
+              type="text"
+              class="url-input"
+              placeholder="Paste URL or type a song / artist name…"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button class="clear-btn" id="clearBtn" title="Clear" style="display:none">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <button class="download-btn" id="downloadBtn">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 3v12m0 0-4-4m4 4 4-4M3 17v2a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2"/></svg>
+            <span id="downloadBtnText">Download</span>
+          </button>
+        </div>
+
+        <!-- Tracker -->
+        <div class="tracker" id="tracker" style="display:none">
+          <div class="tracker-top">
+            <div class="tracker-label">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+              Playlist Progress
+            </div>
+            <div class="tracker-count">
+              <span id="trackerCurrent">0</span>
+              <span class="tracker-sep">/</span>
+              <span id="trackerTotal">—</span>
+              <span class="tracker-songs">songs</span>
+            </div>
+          </div>
+          <div class="tracker-bar-wrap">
+            <div class="tracker-bar-fill" id="trackerBar" style="width:0%"></div>
+          </div>
+          <div class="tracker-title" id="trackerTitle"></div>
+        </div>
+
+        <!-- Progress panel -->
+        <div class="progress-panel" id="progressPanel" style="display:none">
+          <div class="progress-header">
+            <span class="progress-title">
+              <span class="live-dot"></span>
+              Live Output
+            </span>
+            <button class="clear-log-btn" id="clearLogBtn">Clear</button>
+          </div>
+          <div class="progress-log" id="progressLog"></div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Downloaded files section -->
+    <section class="files-section" id="filesSection">
+      <div class="files-header">
+        <h2 class="files-title">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          Downloaded Files
+        </h2>
+        <button class="refresh-btn" id="refreshBtn" title="Refresh">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+        </button>
+      </div>
+      <div class="files-list" id="filesList">
+        <div class="files-empty">
+          <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          <p>No files downloaded yet</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+      Files are saved to <code>downloads/</code> folder &nbsp;·&nbsp; Requires <code>spotdl</code>, <code>yt-dlp</code> &amp; <code>FFmpeg</code>
+    </footer>
+  </div>
+
+  <script src="/static/js/script.js"></script>
+</body>
+</html>
