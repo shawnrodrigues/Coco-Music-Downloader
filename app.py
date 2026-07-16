@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, Response, stream_with_context, stream_with_context
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 import subprocess
 import threading
@@ -29,10 +29,11 @@ def detect_source(url: str) -> str:
     return "search"
 
 
-def build_command(url_or_query: str, source: str) -> list[str]:
+def build_command(url_or_query: str, source: str, spotdl_audio: list[str] | None = None) -> list[str]:
     out = str(DOWNLOADS_DIR / "%(title)s.%(ext)s")
 
     if source in ("spotify", "apple"):
+        audio_sources = spotdl_audio or ["youtube", "youtube-music"]
         return [
             "spotdl",
             url_or_query,
@@ -40,6 +41,7 @@ def build_command(url_or_query: str, source: str) -> list[str]:
             "--format", "mp3",
             "--bitrate", "320k",
             "--threads", "8",
+            "--audio", *audio_sources,
             "--log-level", "INFO",
         ]
 
@@ -121,6 +123,41 @@ def extract_tracker(line: str, state: dict) -> dict | None:
     return None
 
 
+def run_command_stream(cmd: list[str], pq: queue.Queue, tracker_state: dict, env: dict) -> tuple[int, list[str]]:
+    """Run a subprocess and stream structured progress events to the queue."""
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        env=env,
+    )
+
+    lines: list[str] = []
+    for raw_line in iter(process.stdout.readline, ""):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+
+        lines.append(stripped)
+        tracker_event = extract_tracker(stripped, tracker_state)
+        if tracker_event:
+            pq.put(tracker_event)
+
+        pq.put(parse_line(stripped))
+
+    process.wait()
+    return process.returncode, lines
+
+
+def needs_spotdl_fallback(output_lines: list[str]) -> bool:
+    merged = "\n".join(output_lines).lower()
+    return "audioprovidererror" in merged or "yt-dlp download error" in merged
+
+
 def run_download(session_id: str, url_or_query: str, pq: queue.Queue):
     source = detect_source(url_or_query)
     pq.put({"type": "info", "message": f"Detected source: {source.upper()}"})
@@ -135,34 +172,24 @@ def run_download(session_id: str, url_or_query: str, pq: queue.Queue):
     env["PYTHONIOENCODING"] = "utf-8"
 
     try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            env=env,
-        )
+        return_code, output_lines = run_command_stream(cmd, pq, tracker_state, env)
 
-        for raw_line in iter(process.stdout.readline, ""):
-            stripped = raw_line.strip()
-            if not stripped:
-                continue
+        if return_code != 0 and source in ("spotify", "apple") and needs_spotdl_fallback(output_lines):
+            pq.put({"type": "info", "message": "Retrying with alternate audio provider (YouTube)…"})
+            retry_tracker_state = {"total": 0, "downloaded": 0}
+            retry_cmd = build_command(url_or_query, source, spotdl_audio=["youtube"])
+            return_code, retry_lines = run_command_stream(retry_cmd, pq, retry_tracker_state, env)
+            output_lines.extend(retry_lines)
 
-            tracker_event = extract_tracker(stripped, tracker_state)
-            if tracker_event:
-                pq.put(tracker_event)
-
-            pq.put(parse_line(stripped))
-
-        process.wait()
-
-        if process.returncode == 0:
+        if return_code == 0:
             pq.put({"type": "done", "message": "All downloads finished successfully!"})
         else:
-            pq.put({"type": "error", "message": f"Process exited with code {process.returncode}."})
+            pq.put({"type": "error", "message": f"Process exited with code {return_code}."})
+            if any("yt-dlp" in line.lower() for line in output_lines):
+                pq.put({
+                    "type": "error",
+                    "message": "Tip: update spotdl/yt-dlp (pip install -U spotdl yt-dlp) and try again.",
+                })
 
     except FileNotFoundError:
         tool = "spotdl" if source in ("spotify", "apple") else "yt-dlp"
