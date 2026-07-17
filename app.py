@@ -36,6 +36,7 @@ def env_int(name: str, default: int, minimum: int, maximum: int) -> int:
 SPOTDL_THREADS = env_int("SPOTDL_THREADS", default=16, minimum=1, maximum=64)
 SPOTDL_RETRY_THREADS = env_int("SPOTDL_RETRY_THREADS", default=6, minimum=1, maximum=32)
 SPOTDL_MAX_RETRIES = env_int("SPOTDL_MAX_RETRIES", default=10, minimum=1, maximum=20)
+SPOTDL_ENABLE_OFFICIAL_API_FALLBACK = os.environ.get("SPOTDL_ENABLE_OFFICIAL_API_FALLBACK", "1") != "0"
 YTDLP_CONCURRENT_FRAGMENTS = env_int("YTDLP_CONCURRENT_FRAGMENTS", default=16, minimum=1, maximum=64)
 
 
@@ -90,6 +91,7 @@ def build_command(
     spotdl_audio: list[str] | None = None,
     spotdl_threads: int | None = None,
     spotdl_retries: int | None = None,
+    use_official_api: bool = False,
 ) -> list[str]:
     out = str(DOWNLOADS_DIR / "%(title)s.%(ext)s")
 
@@ -97,7 +99,7 @@ def build_command(
         audio_sources = spotdl_audio or ["youtube", "youtube-music"]
         threads = spotdl_threads or SPOTDL_THREADS
         retries = spotdl_retries or SPOTDL_MAX_RETRIES
-        return [
+        cmd = [
             "spotdl",
             url_or_query,
             "--output", str(DOWNLOADS_DIR),
@@ -109,6 +111,9 @@ def build_command(
             "--simple-tui",
             "--log-level", "INFO",
         ]
+        if use_official_api:
+            cmd.append("--use-official-api")
+        return cmd
 
     yt_base = [
         "yt-dlp",
@@ -277,6 +282,21 @@ def spotdl_request_failures(output_lines: list[str]) -> int:
     return sum(1 for line in output_lines if "failed to complete request" in line.lower())
 
 
+def is_spotify_rate_limited(output_lines: list[str]) -> bool:
+    merged = "\n".join(output_lines).lower()
+    return "reached a rate/request limit" in merged
+
+
+def needs_official_api_retry(output_lines: list[str]) -> bool:
+    merged = "\n".join(output_lines).lower()
+    return (
+        "failed to complete request" in merged
+        or "requesterror" in merged
+        or "could not get playlist hashes" in merged
+        or "spotapi" in merged
+    ) and not is_spotify_rate_limited(output_lines)
+
+
 def run_download(session_id: str, url_or_query: str, pq: queue.Queue, cancel_event: threading.Event):
     source = detect_source(url_or_query)
     normalized_input = normalize_input(url_or_query, source)
@@ -332,6 +352,29 @@ def run_download(session_id: str, url_or_query: str, pq: queue.Queue, cancel_eve
         if (
             return_code != 0
             and not cancel_event.is_set()
+            and source == "spotify"
+            and SPOTDL_ENABLE_OFFICIAL_API_FALLBACK
+            and needs_official_api_retry(output_lines)
+        ):
+            pq.put({
+                "type": "info",
+                "message": "Metadata backend failed. Retrying with Spotify official API mode...",
+            })
+            retry_tracker_state = {"total": 0, "downloaded": 0}
+            retry_cmd = build_command(
+                normalized_input,
+                source,
+                spotdl_audio=["youtube", "youtube-music"],
+                spotdl_threads=SPOTDL_RETRY_THREADS,
+                spotdl_retries=max(SPOTDL_MAX_RETRIES, 8),
+                use_official_api=True,
+            )
+            return_code, retry_lines = run_command_stream(session_id, retry_cmd, pq, retry_tracker_state, env)
+            output_lines.extend(retry_lines)
+
+        if (
+            return_code != 0
+            and not cancel_event.is_set()
             and source in ("spotify", "apple")
             and needs_spotdl_fallback(output_lines)
         ):
@@ -353,6 +396,14 @@ def run_download(session_id: str, url_or_query: str, pq: queue.Queue, cancel_eve
             pq.put({"type": "done", "message": "All downloads finished successfully!"})
         else:
             pq.put({"type": "error", "message": f"Process exited with code {return_code}."})
+            if source == "spotify" and is_spotify_rate_limited(output_lines):
+                pq.put({
+                    "type": "error",
+                    "message": (
+                        "Spotify API rate limit reached. Wait for reset, or set "
+                        "SPOTDL_ENABLE_OFFICIAL_API_FALLBACK=0 to avoid official API retry."
+                    ),
+                })
             if any("yt-dlp" in line.lower() for line in output_lines):
                 pq.put({
                     "type": "error",
