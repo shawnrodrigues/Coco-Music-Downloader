@@ -244,6 +244,37 @@ body {
 }
 .download-btn svg { flex-shrink: 0; }
 
+.stop-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: linear-gradient(135deg, #ef4444, #b91c1c);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0 18px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  min-height: 52px;
+  transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s;
+  box-shadow: 0 4px 20px rgba(239,68,68,0.35);
+}
+.stop-btn:hover:not(:disabled) {
+  opacity: 0.92;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 28px rgba(239,68,68,0.45);
+}
+.stop-btn:active:not(:disabled) { transform: translateY(0); }
+.stop-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 /* ===== Tracker ===== */
 .tracker {
   margin-top: 20px;
@@ -389,10 +420,14 @@ body {
 .log-progress .log-text { color: #c4b5fd; }
 .log-converting .log-dot { background: var(--yellow); }
 .log-converting .log-text { color: var(--yellow); }
+.log-warning  .log-dot { background: var(--yellow); }
+.log-warning  .log-text { color: #fcd34d; }
 .log-track    .log-dot { background: var(--green); }
 .log-track    .log-text { color: var(--green); }
 .log-done     .log-dot { background: var(--green); animation: pulse-dot 1s 2; }
 .log-done     .log-text { color: var(--green); font-weight: 600; }
+.log-stopped  .log-dot { background: #fb7185; }
+.log-stopped  .log-text { color: #fda4af; font-weight: 600; }
 .log-error    .log-dot { background: var(--red); }
 .log-error    .log-text { color: var(--red); }
 .log-log      .log-dot { background: rgba(255,255,255,0.2); }

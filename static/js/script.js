@@ -18,6 +18,7 @@ function detectPlatform(value) {
 const urlInput      = document.getElementById('urlInput');
 const downloadBtn   = document.getElementById('downloadBtn');
 const downloadText  = document.getElementById('downloadBtnText');
+const stopBtn       = document.getElementById('stopBtn');
 const clearBtn      = document.getElementById('clearBtn');
 const clearLogBtn   = document.getElementById('clearLogBtn');
 const progressPanel = document.getElementById('progressPanel');
@@ -33,6 +34,7 @@ const refreshBtn    = document.getElementById('refreshBtn');
 const filesList     = document.getElementById('filesList');
 
 let activeSource = null;  // active EventSource
+let activeSessionId = null;
 
 /* ===== Input handling ===== */
 urlInput.addEventListener('input', () => {
@@ -98,6 +100,24 @@ function escapeHtml(str) {
 }
 
 /* ===== Download ===== */
+async function requestStop(sessionId) {
+  if (!sessionId) return;
+  await fetch(`/stop/${sessionId}`, { method: 'POST' });
+}
+
+stopBtn.addEventListener('click', async () => {
+  if (!activeSessionId) return;
+
+  stopBtn.disabled = true;
+  try {
+    await requestStop(activeSessionId);
+    appendLog('info', 'Stopping download...');
+  } catch {
+    appendLog('error', 'Could not send stop request.');
+    stopBtn.disabled = false;
+  }
+});
+
 downloadBtn.addEventListener('click', async () => {
   const url = urlInput.value.trim();
   if (!url) {
@@ -107,8 +127,16 @@ downloadBtn.addEventListener('click', async () => {
     return;
   }
 
-  // Cancel any active stream
+  // Cancel any active stream/session before starting a new one
   if (activeSource) { activeSource.close(); activeSource = null; }
+  if (activeSessionId) {
+    try {
+      await requestStop(activeSessionId);
+    } catch {
+      // best effort
+    }
+    activeSessionId = null;
+  }
 
   // Show panel, reset log, reset tracker
   progressPanel.style.display = 'block';
@@ -138,6 +166,8 @@ downloadBtn.addEventListener('click', async () => {
       return;
     }
     sessionId = data.session_id;
+    activeSessionId = sessionId;
+    stopBtn.disabled = false;
   } catch (err) {
     appendLog('error', 'Could not reach the server. Is it running?');
     resetBtn();
@@ -166,6 +196,7 @@ downloadBtn.addEventListener('click', async () => {
     if (item.type === 'end') {
       es.close();
       activeSource = null;
+      activeSessionId = null;
       resetBtn();
       loadFiles();
       return;
@@ -173,6 +204,11 @@ downloadBtn.addEventListener('click', async () => {
 
     if (item.type === 'done') {
       appendLog('done', item.message);
+      return;
+    }
+
+    if (item.type === 'stopped') {
+      appendLog('stopped', item.message);
       return;
     }
 
@@ -184,6 +220,7 @@ downloadBtn.addEventListener('click', async () => {
     if (es.readyState === EventSource.CLOSED) {
       es.close();
       activeSource = null;
+      activeSessionId = null;
       resetBtn();
       loadFiles();
     }
@@ -194,6 +231,7 @@ downloadBtn.addEventListener('click', async () => {
 function resetBtn() {
   downloadBtn.disabled = false;
   downloadText.textContent = 'Download';
+  stopBtn.disabled = true;
 }
 
 /* ===== Files list ===== */

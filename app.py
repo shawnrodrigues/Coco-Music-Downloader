@@ -6,7 +6,9 @@ import queue
 import os
 import json
 import re
+import signal
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 app = Flask(__name__)
 CORS(app)
@@ -16,6 +18,25 @@ DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 # In-memory store for active download sessions
 progress_queues = {}
+session_cancel_events = {}
+session_processes = {}
+session_lock = threading.Lock()
+
+
+def env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Read an int from env with safe clamping and fallback."""
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+# Tunable concurrency for faster downloads on high-bandwidth connections.
+SPOTDL_THREADS = env_int("SPOTDL_THREADS", default=16, minimum=1, maximum=64)
+SPOTDL_RETRY_THREADS = env_int("SPOTDL_RETRY_THREADS", default=6, minimum=1, maximum=32)
+SPOTDL_MAX_RETRIES = env_int("SPOTDL_MAX_RETRIES", default=10, minimum=1, maximum=20)
+YTDLP_CONCURRENT_FRAGMENTS = env_int("YTDLP_CONCURRENT_FRAGMENTS", default=16, minimum=1, maximum=64)
 
 
 def detect_source(url: str) -> str:
@@ -29,19 +50,63 @@ def detect_source(url: str) -> str:
     return "search"
 
 
-def build_command(url_or_query: str, source: str, spotdl_audio: list[str] | None = None) -> list[str]:
+def normalize_input(url_or_query: str, source: str) -> str:
+    """Normalize known URL patterns that can accidentally force single-track downloads."""
+    if source not in ("apple", "spotify"):
+        return url_or_query
+
+    try:
+        parsed = urlparse(url_or_query)
+    except Exception:
+        return url_or_query
+
+    netloc_lower = parsed.netloc.lower()
+    path_lower = parsed.path.lower()
+
+    if source == "apple":
+        if "music.apple.com" not in netloc_lower:
+            return url_or_query
+        if "/playlist/" not in path_lower and "/album/" not in path_lower:
+            return url_or_query
+
+        query_items = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() != "i"]
+        normalized = parsed._replace(query=urlencode(query_items, doseq=True))
+        return urlunparse(normalized)
+
+    # Spotify share URLs often include query params like ?si=...&utm_source=...
+    # which are unnecessary for playlist/album resolution.
+    if source == "spotify":
+        if "spotify.com" not in netloc_lower:
+            return url_or_query
+        if "/playlist/" in path_lower or "/album/" in path_lower or "/track/" in path_lower:
+            return urlunparse(parsed._replace(query="", fragment=""))
+
+    return url_or_query
+
+
+def build_command(
+    url_or_query: str,
+    source: str,
+    spotdl_audio: list[str] | None = None,
+    spotdl_threads: int | None = None,
+    spotdl_retries: int | None = None,
+) -> list[str]:
     out = str(DOWNLOADS_DIR / "%(title)s.%(ext)s")
 
     if source in ("spotify", "apple"):
         audio_sources = spotdl_audio or ["youtube", "youtube-music"]
+        threads = spotdl_threads or SPOTDL_THREADS
+        retries = spotdl_retries or SPOTDL_MAX_RETRIES
         return [
             "spotdl",
             url_or_query,
             "--output", str(DOWNLOADS_DIR),
             "--format", "mp3",
             "--bitrate", "320k",
-            "--threads", "8",
+            "--threads", str(threads),
+            "--max-retries", str(retries),
             "--audio", *audio_sources,
+            "--simple-tui",
             "--log-level", "INFO",
         ]
 
@@ -49,7 +114,7 @@ def build_command(url_or_query: str, source: str, spotdl_audio: list[str] | None
         "yt-dlp",
         "--format", "bestaudio/best",
         "-x", "--audio-format", "mp3", "--audio-quality", "0",
-        "--concurrent-fragments", "8",
+        "--concurrent-fragments", str(YTDLP_CONCURRENT_FRAGMENTS),
         "--no-embed-thumbnail",
         "--newline",
         "--progress",
@@ -75,6 +140,9 @@ def parse_line(line: str) -> dict:
 
     if "Downloaded" in line or "Skipping" in line:
         return {"type": "track", "message": line}
+
+    if "failed to complete request" in line.lower() or "reinitializing song" in line.lower():
+        return {"type": "warning", "message": line}
 
     if "error" in line.lower() or "failed" in line.lower():
         return {"type": "error", "message": line}
@@ -123,8 +191,18 @@ def extract_tracker(line: str, state: dict) -> dict | None:
     return None
 
 
-def run_command_stream(cmd: list[str], pq: queue.Queue, tracker_state: dict, env: dict) -> tuple[int, list[str]]:
+def run_command_stream(
+    session_id: str,
+    cmd: list[str],
+    pq: queue.Queue,
+    tracker_state: dict,
+    env: dict,
+) -> tuple[int, list[str]]:
     """Run a subprocess and stream structured progress events to the queue."""
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -134,36 +212,90 @@ def run_command_stream(cmd: list[str], pq: queue.Queue, tracker_state: dict, env
         errors="replace",
         bufsize=1,
         env=env,
+        creationflags=creationflags,
     )
 
+    with session_lock:
+        session_processes[session_id] = process
+
     lines: list[str] = []
-    for raw_line in iter(process.stdout.readline, ""):
-        stripped = raw_line.strip()
-        if not stripped:
-            continue
+    try:
+        for raw_line in iter(process.stdout.readline, ""):
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
 
-        lines.append(stripped)
-        tracker_event = extract_tracker(stripped, tracker_state)
-        if tracker_event:
-            pq.put(tracker_event)
+            lines.append(stripped)
+            tracker_event = extract_tracker(stripped, tracker_state)
+            if tracker_event:
+                pq.put(tracker_event)
 
-        pq.put(parse_line(stripped))
+            pq.put(parse_line(stripped))
 
-    process.wait()
-    return process.returncode, lines
+        process.wait()
+        return process.returncode, lines
+    finally:
+        with session_lock:
+            session_processes.pop(session_id, None)
+
+
+def stop_session(session_id: str) -> bool:
+    with session_lock:
+        cancel_event = session_cancel_events.get(session_id)
+        process = session_processes.get(session_id)
+
+    if cancel_event:
+        cancel_event.set()
+
+    if process and process.poll() is None:
+        if os.name == "nt":
+            try:
+                process.send_signal(signal.CTRL_BREAK_EVENT)
+            except Exception:
+                process.terminate()
+        else:
+            process.terminate()
+        try:
+            process.wait(timeout=4)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        return True
+
+    return False
 
 
 def needs_spotdl_fallback(output_lines: list[str]) -> bool:
     merged = "\n".join(output_lines).lower()
-    return "audioprovidererror" in merged or "yt-dlp download error" in merged
+    return (
+        "audioprovidererror" in merged
+        or "yt-dlp download error" in merged
+        or "failed to complete request" in merged
+    )
 
 
-def run_download(session_id: str, url_or_query: str, pq: queue.Queue):
+def spotdl_request_failures(output_lines: list[str]) -> int:
+    return sum(1 for line in output_lines if "failed to complete request" in line.lower())
+
+
+def run_download(session_id: str, url_or_query: str, pq: queue.Queue, cancel_event: threading.Event):
     source = detect_source(url_or_query)
+    normalized_input = normalize_input(url_or_query, source)
+
+    if normalized_input != url_or_query:
+        if source == "apple":
+            pq.put({"type": "info", "message": "Detected Apple track parameter; using full playlist/album URL."})
+        elif source == "spotify":
+            pq.put({"type": "info", "message": "Cleaned Spotify share URL parameters for better reliability."})
+
     pq.put({"type": "info", "message": f"Detected source: {source.upper()}"})
     pq.put({"type": "info", "message": "Starting download…"})
 
-    cmd = build_command(url_or_query, source)
+    if cancel_event.is_set():
+        pq.put({"type": "stopped", "message": "Download stopped by user."})
+        pq.put(None)
+        return
+
+    cmd = build_command(normalized_input, source)
     tracker_state = {"total": 0, "downloaded": 0}
 
     # Force unbuffered output from child Python processes (spotdl / yt-dlp)
@@ -172,16 +304,52 @@ def run_download(session_id: str, url_or_query: str, pq: queue.Queue):
     env["PYTHONIOENCODING"] = "utf-8"
 
     try:
-        return_code, output_lines = run_command_stream(cmd, pq, tracker_state, env)
+        return_code, output_lines = run_command_stream(session_id, cmd, pq, tracker_state, env)
 
-        if return_code != 0 and source in ("spotify", "apple") and needs_spotdl_fallback(output_lines):
-            pq.put({"type": "info", "message": "Retrying with alternate audio provider (YouTube)…"})
+        request_failures = spotdl_request_failures(output_lines)
+        missing_tracks = tracker_state["total"] > 0 and tracker_state["downloaded"] < tracker_state["total"]
+        should_retry_missing = source in ("spotify", "apple") and request_failures >= 3 and missing_tracks
+
+        if should_retry_missing and not cancel_event.is_set():
+            pq.put({
+                "type": "info",
+                "message": (
+                    "Detected repeated request failures. Retrying with safer settings "
+                    f"(threads={SPOTDL_RETRY_THREADS}, retries={max(SPOTDL_MAX_RETRIES, 8)})."
+                ),
+            })
             retry_tracker_state = {"total": 0, "downloaded": 0}
-            retry_cmd = build_command(url_or_query, source, spotdl_audio=["youtube"])
-            return_code, retry_lines = run_command_stream(retry_cmd, pq, retry_tracker_state, env)
+            retry_cmd = build_command(
+                normalized_input,
+                source,
+                spotdl_audio=["youtube", "youtube-music"],
+                spotdl_threads=SPOTDL_RETRY_THREADS,
+                spotdl_retries=max(SPOTDL_MAX_RETRIES, 8),
+            )
+            return_code, retry_lines = run_command_stream(session_id, retry_cmd, pq, retry_tracker_state, env)
             output_lines.extend(retry_lines)
 
-        if return_code == 0:
+        if (
+            return_code != 0
+            and not cancel_event.is_set()
+            and source in ("spotify", "apple")
+            and needs_spotdl_fallback(output_lines)
+        ):
+            pq.put({"type": "info", "message": "Retrying with alternate audio provider (YouTube)…"})
+            retry_tracker_state = {"total": 0, "downloaded": 0}
+            retry_cmd = build_command(
+                normalized_input,
+                source,
+                spotdl_audio=["youtube"],
+                spotdl_threads=SPOTDL_RETRY_THREADS,
+                spotdl_retries=max(SPOTDL_MAX_RETRIES, 8),
+            )
+            return_code, retry_lines = run_command_stream(session_id, retry_cmd, pq, retry_tracker_state, env)
+            output_lines.extend(retry_lines)
+
+        if cancel_event.is_set():
+            pq.put({"type": "stopped", "message": "Download stopped by user."})
+        elif return_code == 0:
             pq.put({"type": "done", "message": "All downloads finished successfully!"})
         else:
             pq.put({"type": "error", "message": f"Process exited with code {return_code}."})
@@ -203,6 +371,8 @@ def run_download(session_id: str, url_or_query: str, pq: queue.Queue):
     except Exception as exc:
         pq.put({"type": "error", "message": f"Unexpected error: {exc}"})
     finally:
+        with session_lock:
+            session_cancel_events.pop(session_id, None)
         pq.put(None)  # sentinel → stream ends
 
 
@@ -225,12 +395,28 @@ def start_download():
 
     session_id = os.urandom(8).hex()
     pq: queue.Queue = queue.Queue()
+    cancel_event = threading.Event()
     progress_queues[session_id] = pq
+    with session_lock:
+        session_cancel_events[session_id] = cancel_event
 
-    t = threading.Thread(target=run_download, args=(session_id, url_or_query, pq), daemon=True)
+    t = threading.Thread(target=run_download, args=(session_id, url_or_query, pq, cancel_event), daemon=True)
     t.start()
 
     return jsonify({"session_id": session_id})
+
+
+@app.route("/stop/<session_id>", methods=["POST"])
+def stop_download(session_id: str):
+    if session_id not in progress_queues and session_id not in session_cancel_events:
+        return jsonify({"error": "Invalid session."}), 404
+
+    stopped = stop_session(session_id)
+    pq = progress_queues.get(session_id)
+    if pq:
+        pq.put({"type": "info", "message": "Stop requested. Finishing current operation..."})
+
+    return jsonify({"status": "stopping" if stopped else "already_stopped"})
 
 
 @app.route("/progress/<session_id>")

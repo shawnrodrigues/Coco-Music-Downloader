@@ -20,7 +20,7 @@ A local web app that lets you download music from **Spotify**, **Apple Music**, 
 - 🍎 Supports **Apple Music playlists & albums**
 - ▶️ Supports **YouTube videos & playlists**
 - 🔍 **Search by song/artist name** (no URL needed)
-- ⚡ **Parallel downloads** — 4 tracks at once
+- ⚡ **Parallel downloads** — higher default concurrency for faster batch downloads
 - 📁 All files saved to a local `downloads/` folder
 - 📊 **Live progress** streamed to the browser in real-time
 - 🎨 Dark responsive UI — works on desktop and mobile
@@ -78,6 +78,28 @@ sudo apt install ffmpeg
 ```bash
 python app.py
 ```
+
+### Optional: tune concurrency for your network/CPU
+```bash
+# Windows PowerShell
+$env:SPOTDL_THREADS="16"
+$env:SPOTDL_RETRY_THREADS="6"
+$env:SPOTDL_MAX_RETRIES="10"
+$env:YTDLP_CONCURRENT_FRAGMENTS="16"
+python app.py
+```
+
+```bash
+# macOS / Linux
+SPOTDL_THREADS=16 SPOTDL_RETRY_THREADS=6 SPOTDL_MAX_RETRIES=10 YTDLP_CONCURRENT_FRAGMENTS=16 python app.py
+```
+
+Notes:
+- `SPOTDL_THREADS` controls how many tracks `spotdl` processes in parallel (Spotify/Apple).
+- `SPOTDL_RETRY_THREADS` is used automatically when request failures are detected.
+- `SPOTDL_MAX_RETRIES` controls Spotify metadata retry attempts.
+- `YTDLP_CONCURRENT_FRAGMENTS` controls per-track fragment concurrency for `yt-dlp`.
+- Both values are clamped to `1..64`.
 
 Open **http://localhost:5000** in your browser.
 
