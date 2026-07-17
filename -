@@ -1,0 +1,39 @@
+[
+    {
+        "name": "my favourite song",
+        "artists": [
+            "Kairo X"
+        ],
+        "artist": "Kairo X",
+        "genres": [
+            "",
+            ""
+        ],
+        "disc_number": 1,
+        "disc_count": 1,
+        "album_name": "my favourite song",
+        "album_artist": "Kairo X",
+        "duration": 91,
+        "year": 2025,
+        "date": "2025-11-27",
+        "track_number": 1,
+        "tracks_count": 1,
+        "song_id": "3Hzqz6K3j7WsVvh79Gdmbk",
+        "explicit": false,
+        "publisher": "9554808 Records DK",
+        "url": "https://open.spotify.com/track/3Hzqz6K3j7WsVvh79Gdmbk",
+        "isrc": "",
+        "cover_url": "https://i.scdn.co/image/ab67616d0000b273ea3fbb0d14b42a2e47173a77",
+        "copyright_text": "",
+        "download_url": "https://music.youtube.com/watch?v=DTbEGcFeCwk",
+        "lyrics": null,
+        "popularity": 10,
+        "album_id": "4r9z7U9DeljuVOVevz9OJS",
+        "list_name": null,
+        "list_url": null,
+        "list_position": null,
+        "list_length": null,
+        "artist_id": "27hHcSPeGlVjV3jBOqx9aw",
+        "album_type": "album"
+    }
+]

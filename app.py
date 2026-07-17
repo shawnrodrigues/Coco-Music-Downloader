@@ -7,6 +7,7 @@ import os
 import json
 import re
 import signal
+from urllib.request import Request, urlopen
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -83,6 +84,67 @@ def normalize_input(url_or_query: str, source: str) -> str:
             return urlunparse(parsed._replace(query="", fragment=""))
 
     return url_or_query
+
+
+def is_apple_playlist_url(url_or_query: str) -> bool:
+    try:
+        parsed = urlparse(url_or_query)
+    except Exception:
+        return False
+    return "music.apple.com" in parsed.netloc.lower() and "/playlist/" in parsed.path.lower()
+
+
+def decode_json_string_fragment(value: str) -> str:
+    """Decode a JSON string fragment like \u0026 and escaped quotes."""
+    try:
+        return json.loads(f'"{value}"')
+    except Exception:
+        return value
+
+
+def extract_apple_playlist_queries(playlist_url: str) -> list[str]:
+    """Extract artist-title search queries from Apple Music playlist page metadata."""
+    parsed = urlparse(playlist_url)
+    playlist_id = parsed.path.rstrip("/").split("/")[-1]
+
+    req = Request(
+        playlist_url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/126.0.0.0 Safari/537.36"
+            )
+        },
+    )
+
+    with urlopen(req, timeout=25) as resp:
+        html = resp.read().decode("utf-8", errors="replace")
+
+    item_pattern = re.compile(
+        rf'"id":"track-lockup - {re.escape(playlist_id)} - [^\"]+".*?'
+        r'"title":"(?P<title>[^\"]+)".*?'
+        r'"artistName":"(?P<artist>[^\"]+)"',
+        re.DOTALL,
+    )
+
+    seen: set[str] = set()
+    queries: list[str] = []
+
+    for match in item_pattern.finditer(html):
+        title = decode_json_string_fragment(match.group("title")).strip()
+        artist = decode_json_string_fragment(match.group("artist")).strip()
+        if not title:
+            continue
+
+        query = f"{artist} - {title}" if artist else title
+        key = query.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        queries.append(query)
+
+    return queries
 
 
 def build_command(
@@ -297,6 +359,65 @@ def needs_official_api_retry(output_lines: list[str]) -> bool:
     ) and not is_spotify_rate_limited(output_lines)
 
 
+def run_apple_playlist_fallback(
+    session_id: str,
+    playlist_url: str,
+    pq: queue.Queue,
+    cancel_event: threading.Event,
+    env: dict,
+) -> bool:
+    """Download Apple playlist tracks by scraping page metadata and searching YouTube."""
+    try:
+        queries = extract_apple_playlist_queries(playlist_url)
+    except Exception as exc:
+        pq.put({"type": "error", "message": f"Could not read Apple playlist tracks: {exc}"})
+        return False
+
+    if not queries:
+        pq.put({
+            "type": "error",
+            "message": "Could not extract tracks from this Apple playlist URL.",
+        })
+        return False
+
+    total = len(queries)
+    completed = 0
+    failed = 0
+    pq.put({"type": "info", "message": f"Apple playlist detected: {total} tracks found."})
+    pq.put({"type": "tracker", "current": 0, "total": total, "title": ""})
+
+    for idx, query in enumerate(queries, start=1):
+        if cancel_event.is_set():
+            break
+
+        pq.put({"type": "info", "message": f"[{idx}/{total}] Searching: {query}"})
+        item_tracker_state = {"total": 0, "downloaded": 0}
+        cmd = build_command(query, "search")
+        return_code, _ = run_command_stream(session_id, cmd, pq, item_tracker_state, env)
+
+        if return_code == 0:
+            completed += 1
+        else:
+            failed += 1
+            pq.put({"type": "warning", "message": f"Failed: {query}"})
+
+        pq.put({"type": "tracker", "current": idx, "total": total, "title": query})
+
+    if cancel_event.is_set():
+        pq.put({"type": "stopped", "message": "Download stopped by user."})
+        return True
+
+    if completed == 0:
+        pq.put({"type": "error", "message": "No tracks were downloaded from Apple playlist fallback."})
+        return False
+
+    if failed > 0:
+        pq.put({"type": "done", "message": f"Finished with partial success: {completed}/{total} tracks."})
+    else:
+        pq.put({"type": "done", "message": "All downloads finished successfully!"})
+    return True
+
+
 def run_download(session_id: str, url_or_query: str, pq: queue.Queue, cancel_event: threading.Event):
     source = detect_source(url_or_query)
     normalized_input = normalize_input(url_or_query, source)
@@ -324,6 +445,11 @@ def run_download(session_id: str, url_or_query: str, pq: queue.Queue, cancel_eve
     env["PYTHONIOENCODING"] = "utf-8"
 
     try:
+        if source == "apple" and is_apple_playlist_url(normalized_input):
+            handled = run_apple_playlist_fallback(session_id, normalized_input, pq, cancel_event, env)
+            if handled:
+                return
+
         return_code, output_lines = run_command_stream(session_id, cmd, pq, tracker_state, env)
 
         request_failures = spotdl_request_failures(output_lines)

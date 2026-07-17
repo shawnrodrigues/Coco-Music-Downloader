@@ -102,6 +102,7 @@ Notes:
 - `SPOTDL_ENABLE_OFFICIAL_API_FALLBACK=1` retries with Spotify official API only if SpotAPI metadata fetch fails.
 - `YTDLP_CONCURRENT_FRAGMENTS` controls per-track fragment concurrency for `yt-dlp`.
 - Both values are clamped to `1..64`.
+- Apple playlist URLs are auto-parsed from Apple page metadata and downloaded track-by-track via YouTube search fallback when direct parsing fails.
 
 Open **http://localhost:5000** in your browser.
 
